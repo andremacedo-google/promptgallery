@@ -1,0 +1,1102 @@
+REPORT zrp_fi_libro_de_honorarios.
+INCLUDE <icons>.
+
+TABLES: bseg,  bkpf, t012k, t012t, t001, lfa1.
+TABLES: zfinulos_lr.
+
+*----------------------------------------------------------------------
+* DECLARACIONES GLOBALES
+*----------------------------------------------------------------------
+
+DATA: BEGIN OF gt_sal_cab OCCURS 0.
+        INCLUDE STRUCTURE zst_fi_conci_banca_cab.
+DATA: END OF gt_sal_cab.
+
+DATA: gs_sal_cab LIKE gt_sal_cab.
+
+
+DATA: BEGIN OF gt_sal_det OCCURS 0.
+        INCLUDE STRUCTURE zst_fi_libro_honorario.
+
+DATA:
+  bldat     LIKE bkpf-bldat,
+  qsskz     LIKE bseg-qsskz,
+  dmbtr_q4  LIKE bseg-dmbe2,
+  dmbtr_q5  LIKE bseg-dmbe2,
+  dmbtr_es  LIKE bseg-dmbe2,
+  dmbtr_an  LIKE bseg-dmbe2,
+* CCASTILLOA 27.01.2021 Se agrega campo indicador retencion
+  wt_withcd LIKE with_item-wt_withcd.
+DATA: END OF gt_sal_det.
+
+
+DATA: BEGIN OF gt_sal_tot OCCURS 0.
+        INCLUDE STRUCTURE zst_fi_libro_hono_tot.
+DATA: END OF gt_sal_tot.
+
+DATA: gs_sal_tot LIKE gt_sal_tot.
+
+DATA: BEGIN OF gt_bkpf OCCURS 0.
+        INCLUDE STRUCTURE bkpf.
+DATA: END OF gt_bkpf.
+
+DATA: BEGIN OF gt_bseg OCCURS 0.
+        INCLUDE STRUCTURE bseg.
+DATA: END OF gt_bseg.
+DATA: st_with_item TYPE with_item,
+      ti_with_item TYPE TABLE OF with_item.
+
+
+*DATA: BEGIN OF gt_codsii OCCURS 0.
+*        INCLUDE STRUCTURE zfe_cl_tipodocf.
+*DATA: END OF gt_codsii.
+
+
+
+DATA : g_html_container TYPE REF TO cl_gui_custom_container,
+       g_html_control   TYPE REF TO cl_gui_html_viewer.
+
+
+* Variables y estructuras para ALV
+TYPE-POOLS: slis.
+DATA: wa_layout        TYPE slis_layout_alv,
+      ti_fieldcat      TYPE slis_t_fieldcat_alv WITH HEADER LINE,
+      ti_events        TYPE slis_t_event,
+      ti_header        TYPE slis_t_listheader,
+      ti_header2       TYPE slis_listheader, " Work Area con tÌtulo
+*     Guarda los cambios realizados en tiempo de ejecucion del ALV
+      wa_grid_settings TYPE lvc_s_glay VALUE 'X'.
+DATA: ti_sort        TYPE slis_t_sortinfo_alv.
+
+
+
+
+CONSTANTS:
+          c_form_uaf   TYPE tdsfname VALUE 'ZSF_FI_LIBRO_HONORARIOS'.
+
+*----------------------------------------------------------------------
+* SELECTION-SCREEN
+*----------------------------------------------------------------------
+SELECTION-SCREEN BEGIN OF BLOCK b1 WITH FRAME TITLE TEXT-t01.
+
+  PARAMETERS     : p_bukrs LIKE  bkpf-bukrs,
+                   p_gjahr LIKE  bseg-gjahr.
+*inicio modificacion Jcostazini
+  "                 p_monat LIKE  bkpf-monat.
+
+  SELECT-OPTIONS: s_monat FOR bkpf-monat.
+
+*"fin modificacion Jcostazini
+
+
+  SELECT-OPTIONS :
+                   s_blart   FOR   bkpf-blart,
+                   s_belnr   FOR   bkpf-belnr,
+                   s_lifnr   FOR   lfa1-lifnr,
+                   s_budat   FOR   bkpf-budat.
+
+
+
+  SELECTION-SCREEN SKIP.
+
+SELECTION-SCREEN END OF BLOCK b1.
+
+*----------------------------------------------------------------------
+* START-OF-SELECTION
+*----------------------------------------------------------------------
+START-OF-SELECTION.
+
+  PERFORM buscar_datos.
+
+*----------------------------------------------------------------------
+* END-OF-SELECTION
+*----------------------------------------------------------------------
+END-OF-SELECTION.
+
+  PERFORM mostrar_alv.
+
+*IF p_01 = 'X'.
+*  PERFORM imprimir_reporte.
+*ELSE.
+*  PERFORM generar_pdf.
+*ENDIF.
+*&---------------------------------------------------------------------*
+*&      Form  BUSCAR_DATOS
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM buscar_datos .
+
+  DATA:  l_budat    LIKE bkpf-budat.
+
+  DATA: t_edocldteaccv    TYPE TABLE OF edocldteaccv, "20/02/"017
+        ls_t_edocldteaccv LIKE LINE OF t_edocldteaccv.
+
+* CCASTILLOA 27.01.2021 Se agrega variable para monto de retencion
+  DATA lv_wt_qbshb TYPE wt_wt1.
+
+*Llena cabecera
+  SELECT SINGLE * FROM   t001
+                    WHERE  bukrs = p_bukrs.
+
+  IF sy-subrc = 0.
+    CONCATENATE p_bukrs t001-butxt INTO  gs_sal_cab-sociedad
+                SEPARATED BY space.
+  ENDIF.
+
+
+* Busca el ultimo dia del mes
+  CONCATENATE p_gjahr s_monat-low '01' INTO l_budat.
+  CALL FUNCTION 'RP_LAST_DAY_OF_MONTHS'
+    EXPORTING
+      day_in            = l_budat
+    IMPORTING
+      last_day_of_month = gs_sal_cab-fecha
+    EXCEPTIONS
+      day_in_no_date    = 1
+      OTHERS            = 2.
+
+* Documentos reversados
+  SELECT belnr
+    INTO zfinulos_lr-belnr
+    FROM zfinulos_lr
+   WHERE bukrs EQ p_bukrs
+     AND gjahr EQ p_gjahr
+     AND monat IN s_monat.
+
+    MOVE 'E'               TO s_belnr-sign.
+    MOVE 'EQ'              TO s_belnr-option.
+    MOVE zfinulos_lr-belnr TO s_belnr-low.
+    MOVE zfinulos_lr-belnr TO s_belnr-high.
+    APPEND s_belnr.
+  ENDSELECT.
+
+
+*Llena Detalle
+  SELECT * INTO  CORRESPONDING FIELDS OF TABLE  gt_bkpf
+           FROM  bkpf
+           WHERE bukrs = p_bukrs
+           AND   gjahr = p_gjahr
+*"Inicio modificacion jcostazini
+           AND   monat IN s_monat
+"           AND   monat = p_monat
+
+*"fin modificacion jcostazini
+           AND   blart IN s_blart
+           AND   belnr IN s_belnr.
+
+*  IF p_bukrs = '2100' AND p_gjahr = '2021' AND
+**"Inicio modificacion jcostazini
+*     "p_monat = '06'.
+*     s_monat-low = '06'.
+**"fin modificacion jcostazini
+*    MOVE 'E'          TO s_belnr-sign.
+*    MOVE 'BT'         TO s_belnr-option.
+*    MOVE '7100000008' TO s_belnr-low.
+*    MOVE '7100000009' TO s_belnr-high.
+*    APPEND s_belnr.
+*  ENDIF.
+
+  IF sy-subrc EQ 0.
+    SORT gt_bkpf ASCENDING BY blart.
+
+*    SELECT * INTO  CORRESPONDING FIELDS OF TABLE  gt_bseg
+*             FROM  bseg
+*             FOR ALL ENTRIES IN  gt_bkpf
+*             WHERE bukrs = gt_bkpf-bukrs
+*             AND   gjahr = gt_bkpf-gjahr
+*             AND   belnr = gt_bkpf-belnr.
+
+    DATA etl182c4r5786 TYPE TABLE OF bseg.
+    CALL FUNCTION 'FAGL_GET_BSEG_FOR_ALL_ENTRIES'
+      EXPORTING
+        it_for_all_entries = gt_bkpf[]
+        i_where_clause     = |BUKRS = IT_FOR_ALL_ENTRIES-BUKRS AND GJAHR = IT_FOR_ALL_ENTRIES-GJAHR AND BELNR = IT_FOR_ALL_ENTRIES-BELNR|
+      IMPORTING
+        et_bseg            = etl182c4r5786
+      EXCEPTIONS
+        not_found          = 1.
+    IF sy-subrc = 0 AND lines( etl182c4r5786 ) > 0.
+      MOVE-CORRESPONDING etl182c4r5786 TO gt_bseg[].
+      sy-dbcnt = lines( etl182c4r5786 ).
+    ELSE.
+      sy-subrc = 4.
+      sy-dbcnt = 0.
+    ENDIF.
+
+    " cambio futuro CLAD
+*     SELECT * INTO  CORRESPONDING FIELDS OF TABLE ti_with_item
+*      from with_item
+*      FOR ALL ENTRIES IN  gt_bkpf
+*             WHERE bukrs = gt_bkpf-bukrs
+*             AND   gjahr = gt_bkpf-gjahr
+*             AND   belnr = gt_bkpf-belnr.
+
+*SELECT * INTO  CORRESPONDING FIELDS OF TABLE gt_codsii
+*         FROM  zfe_cl_tipodocf.
+
+
+
+
+*    LOOP AT  gt_bkpf.
+*       READ TABLE  gt_codsii WITH  KEY  bukrs   = p_bukrs
+*                                        tipodte = gt_bkpf-blart.
+*       IF sy-subrc = 0.
+*          gt_sal_det-tipodte = gt_codsii-tipodte.
+*       ENDIF.
+*       gt_sal_det-belnr = gt_bkpf-belnr.
+*       gt_sal_det-xblnr = gt_bkpf-xblnr.
+*       gt_sal_det-budat = gt_bkpf-budat.
+*
+*       READ TABLE gt_bseg WITH  KEY  belnr = gt_bkpf-belnr
+*                                     koart = 'K'.
+*       IF sy-subrc = 0.
+*          SELECT SINGLE  stcd1 name1    INTO (gt_sal_det-stcd1, gt_sal_det-name1)
+*                 FROM    lfa1
+*                 WHERE   lifnr = gt_bseg-lifnr.
+*       ENDIF.
+*
+*
+*     LOOP AT  gt_bseg WHERE belnr = gt_bkpf-belnr.
+*       IF sy-subrc = 0  AND  gt_bseg-kostl <> ' '.
+*          gt_sal_det-bruto = gt_sal_det-bruto + gt_bseg-dmbtr.
+*       ENDIF.
+*    ENDLOOP.
+*
+*    READ TABLE gt_bseg WITH  KEY  belnr = gt_bkpf-belnr
+*                                  hkont  = '4620702000'.
+*    IF sy-subrc = 0.
+*       gt_sal_det-reten  = gt_bseg-dmbtr.
+*    ENDIF.
+*
+*
+*    gt_sal_det-total =   gt_sal_det-bruto - gt_sal_det-reten.
+*
+*    APPEND gt_sal_det.
+*    CLEAR  gt_sal_det.
+* ENDLOOP.
+
+* Modificación 20/02/2017 EAL Descomenta rutina tabla salida
+    LOOP AT  gt_bkpf.
+*    READ TABLE  gt_codsii WITH  KEY  bukrs   = p_bukrs
+*                                     tipodte = gt_bkpf-blart.
+*    IF sy-subrc = 0.
+*      gt_sal_det-tipodte = gt_codsii-tipodte.
+*    ENDIF.
+
+      CASE gt_bkpf-xreversed.
+        WHEN 'X'.
+          CASE gt_bkpf-blart.
+            WHEN '70' OR '71'.
+              CONTINUE.
+            WHEN '72'.
+              gt_sal_det-blart = gt_bkpf-blart.
+              gt_sal_det-belnr = gt_bkpf-belnr.
+              gt_sal_det-xblnr = gt_bkpf-xblnr.
+
+              gt_sal_det-name1 = 'NULO'.
+              CONTINUE.
+          ENDCASE.
+
+        WHEN OTHERS.
+      ENDCASE.
+
+
+      gt_sal_det-belnr = gt_bkpf-belnr.
+      gt_sal_det-xblnr = gt_bkpf-xblnr.
+      gt_sal_det-budat = gt_bkpf-budat.
+      gt_sal_det-blart = gt_bkpf-blart.
+
+      READ TABLE gt_bseg WITH  KEY  belnr = gt_bkpf-belnr
+                                    koart = 'K'.
+      IF sy-subrc = 0.
+        SELECT SINGLE  stcd1 name1    INTO (gt_sal_det-stcd1, gt_sal_det-name1)
+               FROM    lfa1
+               WHERE   lifnr = gt_bseg-lifnr.
+      ENDIF.
+
+      SELECT SINGLE dte_type
+        INTO gt_sal_det-tipodte
+        FROM edocldteacc
+        WHERE blart = gt_bkpf-blart.
+      DATA lv_wt_withcd TYPE wt_withcd.
+
+*      "Tipo de retención
+*      SELECT SINGLE wt_withcd
+*      INTO lv_wt_withcd
+*      FROM with_item
+*        WHERE bukrs EQ gt_bkpf-bukrs
+*        AND belnr EQ gt_bkpf-belnr
+*        AND gjahr EQ gt_bkpf-gjahr.
+
+
+
+
+      LOOP AT  gt_bseg WHERE belnr = gt_bkpf-belnr.
+
+        "Exento
+        IF gt_bseg-h_blart = 71 AND gt_bseg-koart = 'S' AND gt_bseg-qsskz = ''.
+          "IF sy-subrc = 0  AND  gt_bseg-kostl <> ' '.    " gt_bseg-kostl <> ' ' AND
+**        gt_sal_det-exento = gt_sal_det-exento + gt_bseg-dmbe2. " Coment 6600649
+          gt_sal_det-exento = gt_sal_det-exento + gt_bseg-wrbtr. " Add.   6600649
+        ENDIF.
+
+        "bruto
+        IF gt_bseg-h_blart NE 71 AND gt_bseg-koart EQ 'S' AND gt_bseg-qsskz EQ ''.
+          "gt_bseg-kostl <> ' ' AND
+
+          " Add. 6600649
+          " Es anulación manual, muiltiplicar por -1
+          DATA : lv_mult TYPE p.
+          IF  gt_bseg-h_blart EQ 70
+          AND gt_bkpf-tcode   EQ 'FB65'.
+            gt_bseg-wrbtr = gt_bseg-wrbtr * -1.
+          ENDIF.
+          IF gt_bseg-shkzg EQ 'H'.
+            lv_mult = -1.
+          ELSE.
+            lv_mult = 1.
+          ENDIF.
+          " Add.6600649
+
+**        gt_sal_det-bruto = gt_sal_det-bruto + gt_bseg-dmbe2. " Coment 6600649
+          gt_sal_det-bruto = gt_sal_det-bruto + gt_bseg-wrbtr * lv_mult. " Add.   6600649
+        ENDIF.
+
+
+        "Tipo de retención
+* CCASTILLOA 27.01.2021 Se obtiene el monto de la retencion
+*        SELECT SINGLE wt_withcd
+*        INTO lv_wt_withcd
+        SELECT SINGLE wt_withcd wt_qbshb
+        INTO (lv_wt_withcd, lv_wt_qbshb)
+        FROM with_item
+          WHERE bukrs EQ gt_bkpf-bukrs
+          AND belnr EQ gt_bkpf-belnr
+          AND gjahr EQ gt_bkpf-gjahr
+          AND witht EQ gt_bseg-qsskz.
+* 02.05.2022 cambio
+        IF sy-subrc NE 0.
+          CLEAR lv_wt_qbshb.
+        ELSE.
+          IF gt_bseg-qsskz = 'Q4' AND lv_wt_withcd = 'B7'.
+          ELSE.
+            gt_sal_det-dmbtr_an = lv_wt_qbshb.
+
+            SELECT SINGLE text40
+              INTO gt_sal_det-tipo_ret
+              FROM t059zt
+             WHERE wt_withcd EQ lv_wt_withcd
+               AND spras EQ sy-langu
+               AND land1 EQ 'CL'
+               AND witht EQ gt_bseg-qsskz.
+
+          ENDIF.
+        ENDIF.
+
+
+* CCASTILLO 27.01.2021 Se agrega campo indicador de retencion
+        IF sy-subrc EQ 0.
+          IF gt_bseg-qsskz = 'Q4' AND lv_wt_withcd = 'B7'.
+            gt_sal_det-dmbtr_es = lv_wt_qbshb.
+          ELSE.
+            gt_sal_det-wt_withcd = lv_wt_withcd.
+          ENDIF.
+        ENDIF.
+
+      ENDLOOP.
+
+
+
+      "READ TABLE gt_bseg WITH  KEY  belnr = gt_bkpf-belnr
+      "                              hkont  = '2128000004'."4620702000'.
+
+      gt_sal_det-qsskz = gt_bseg-qsskz.
+
+* CCASTILLOA 27.01.2021 Se reemplaza la obtencion del tipo de retencion
+*      "Retencion 10%
+*      READ TABLE gt_bseg WITH  KEY  belnr = gt_bkpf-belnr
+*                                    koart = 'S'
+*                                    qsskz = 'Q4'.
+*
+*      IF sy-subrc = 0.
+**      gt_sal_det-reten  = gt_bseg-dmbtr.
+*        gt_sal_det-reten     = gt_bseg-dmbe2.
+*        gt_sal_det-dmbtr_q4  = gt_bseg-dmbe2.
+*      ENDIF.
+*
+*
+*      IF sy-subrc EQ 4.
+*        "Retencion 10,75%
+*        READ TABLE gt_bseg WITH  KEY  belnr = gt_bkpf-belnr
+*                                   koart = 'S'
+*                                   qsskz = 'Q5'.
+*
+*        IF sy-subrc = 0.
+**      gt_sal_det-reten  = gt_bseg-dmbtr.
+*          gt_sal_det-reten     = gt_bseg-dmbe2.
+*          gt_sal_det-dmbtr_q5  = gt_bseg-dmbe2.
+*        ENDIF.
+*
+*
+*      ENDIF.
+      gt_sal_det-reten3    = gt_sal_det-dmbtr_es * -1.
+*02.05.2022 cambio
+*      gt_sal_det-reten     = lv_wt_qbshb * -1.
+*      gt_sal_det-dmbtr_q5  = lv_wt_qbshb * -1.
+      gt_sal_det-reten     = gt_sal_det-dmbtr_an * -1.
+      gt_sal_det-dmbtr_q5  = gt_sal_det-dmbtr_an * -1.
+
+
+      IF sy-subrc = 0.
+*      gt_sal_det-reten  = gt_bseg-dmbtr.
+* CCASTILLOA 27.01.2021 Se reemplaza la obtencion del tipo de retencion
+*        gt_sal_det-reten  = gt_bseg-dmbe2.
+*02.05.2022 cambio
+*        gt_sal_det-reten  = lv_wt_qbshb * -1.
+        gt_sal_det-reten  = gt_sal_det-dmbtr_an * -1.
+      ENDIF.
+
+      IF gt_bseg-h_blart = 71.
+        gt_sal_det-total = gt_sal_det-exento.
+      ELSE.
+        gt_sal_det-total = gt_sal_det-bruto - gt_sal_det-reten - gt_sal_det-reten3.
+      ENDIF.
+
+
+
+
+
+*    SELECT SINGLE witht
+*      INTO gt_sal_det-tipo_ret
+*      FROM rbws
+*      WHERE belnr = gt_bkpf-belnr
+*      AND gjahr = gt_bkpf-gjahr.
+
+      gt_sal_det-bldat = gt_bkpf-bldat.
+
+      APPEND gt_sal_det.
+      CLEAR  gt_sal_det.
+
+      " Add. 6600649
+      CLEAR: lv_wt_qbshb,
+             lv_wt_withcd.
+      " Add. 6600649
+
+    ENDLOOP.
+
+  ENDIF.
+* Modificación 20/02/2017
+
+* Modificación 17/05/2017
+
+
+*Totales
+********
+  LOOP AT  gt_sal_det.
+    gs_sal_tot-exento =  gs_sal_tot-exento + gt_sal_det-exento.
+    gs_sal_tot-bruto  =  gs_sal_tot-bruto + gt_sal_det-bruto.
+    gs_sal_tot-reten  =  gs_sal_tot-reten + gt_sal_det-reten.
+    gs_sal_tot-total  =  gs_sal_tot-total + gt_sal_det-total.
+    gs_sal_tot-todoc  =  gs_sal_tot-todoc + 1.
+  ENDLOOP.
+
+
+ENDFORM.                    " BUSCAR_DATOS
+
+
+*&---------------------------------------------------------------------*
+*&      Form  IMPRIMIR_REPORTE
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM imprimir_reporte .
+  DATA:       fm_name TYPE rs38l_fnam.
+
+
+*Rutinas para Impresion
+  DATA: lv_fecha(30),
+        lv_feini(10),
+        lv_ffin(10),
+        lv_bukrs(20).
+
+
+
+  CALL FUNCTION 'SSF_FUNCTION_MODULE_NAME'
+    EXPORTING
+      formname           = c_form_uaf
+    IMPORTING
+      fm_name            = fm_name
+    EXCEPTIONS
+      no_form            = 1
+      no_function_module = 2
+      OTHERS             = 3.
+
+
+  CALL FUNCTION fm_name
+    EXPORTING
+      gs_sal_cab       = gs_sal_cab
+      gs_sal_tot       = gs_sal_tot
+    TABLES
+      gt_sal_det       = gt_sal_det
+    EXCEPTIONS
+      formatting_error = 1
+      internal_error   = 2
+      send_error       = 3
+      user_canceled    = 4
+      OTHERS           = 5.
+
+
+
+
+*  CALL FUNCTION fm_name
+*    EXPORTING
+*      gs_sal_cab                 = gs_sal_cab
+*      gs_sal_tot                 = gs_sal_tot
+*    TABLES
+*      gt_sal_det                 = gt_sal_det
+*   EXCEPTIONS
+*     formatting_error           = 1
+*     internal_error             = 2
+*     send_error                 = 3
+*     user_canceled              = 4
+*     OTHERS                     = 5
+*            .
+
+
+ENDFORM.                    " IMPRIMIR_REPORTE
+*&---------------------------------------------------------------------*
+*&      Form  PDF
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM generar_pdf.
+  DATA:        fmname TYPE rs38l_fnam.
+
+  DATA: lt_pdf     TYPE TABLE OF tline,
+        ls_pdf     LIKE LINE OF lt_pdf,
+        lv_url     TYPE char255,
+        pdf_fsize  TYPE  i,
+        lv_content TYPE xstring,
+        lt_data    TYPE STANDARD TABLE OF x255.
+
+  DATA : l_job_output_info TYPE ssfcrescl.
+  DATA : ls_control_param  TYPE ssfctrlop.
+  DATA:  out_op TYPE ssfcompop.
+  DATA:  fm_name TYPE rs38l_fnam.
+  DATA:  lv_guiobj          TYPE REF TO cl_gui_frontend_services.
+
+  DATA: lv_name     TYPE string,
+        lv_path     TYPE string,
+        lv_fullpath TYPE string,
+        lv_filter   TYPE string,
+        lv_uact     TYPE i,
+        lv_filename TYPE string.
+
+
+
+  FIELD-SYMBOLS <fs_x> TYPE x.
+
+
+
+  ls_control_param-getotf    = 'X'.
+  ls_control_param-no_dialog = 'X'.
+  ls_control_param-preview   = 'X'.
+  out_op-tdprinter           = 'PDF1'.
+
+
+*Rutinas para Impresion
+  DATA: w_fecha(30),
+        w_feini(10),
+        w_ffin(10),
+        w_bukrs(20),
+        w_opera(20).
+
+
+
+  CALL FUNCTION 'SSF_FUNCTION_MODULE_NAME'
+    EXPORTING
+      formname           = c_form_uaf
+    IMPORTING
+      fm_name            = fm_name
+    EXCEPTIONS
+      no_form            = 1
+      no_function_module = 2
+      OTHERS             = 3.
+
+
+
+  CALL FUNCTION fm_name
+    EXPORTING
+      control_parameters = ls_control_param
+      output_options     = out_op
+      user_settings      = 'X'
+      gs_sal_cab         = gs_sal_cab
+      gs_sal_tot         = gs_sal_tot
+    IMPORTING
+      job_output_info    = l_job_output_info
+    TABLES
+      gt_sal_det         = gt_sal_det
+    EXCEPTIONS
+      formatting_error   = 1
+      internal_error     = 2
+      send_error         = 3
+      user_canceled      = 4
+      OTHERS             = 5.
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+
+
+*Envio a PDF
+************
+  CALL FUNCTION 'CONVERT_OTF'
+    EXPORTING
+      format                = 'PDF'
+    IMPORTING
+      bin_filesize          = pdf_fsize
+    TABLES
+      otf                   = l_job_output_info-otfdata
+      lines                 = lt_pdf
+    EXCEPTIONS
+      err_max_linewidth     = 1
+      err_format            = 2
+      err_conv_not_possible = 3
+      OTHERS                = 4.
+
+
+  CONCATENATE 'Honorarios al ' '_' gs_sal_cab-fecha '.pdf' INTO lv_name.
+  CREATE OBJECT lv_guiobj.
+  CALL METHOD lv_guiobj->file_save_dialog
+    EXPORTING
+      default_extension = 'pdf'
+      default_file_name = lv_name
+      file_filter       = lv_filter
+    CHANGING
+      filename          = lv_name
+      path              = lv_path
+      fullpath          = lv_fullpath
+      user_action       = lv_uact.
+  IF lv_uact = lv_guiobj->action_cancel.
+    EXIT.
+  ENDIF.
+
+
+*..................................DOWNLOAD AS FILE....................*
+
+  MOVE lv_fullpath TO lv_filename.
+  CALL FUNCTION 'GUI_DOWNLOAD'
+    EXPORTING
+      bin_filesize            = pdf_fsize
+      filename                = lv_filename
+      filetype                = 'BIN'
+    TABLES
+      data_tab                = lt_pdf
+    EXCEPTIONS
+      file_write_error        = 1
+      no_batch                = 2
+      gui_refuse_filetransfer = 3
+      invalid_type            = 4
+      no_authority            = 5
+      unknown_error           = 6
+      header_not_allowed      = 7
+      separator_not_allowed   = 8
+      filesize_not_allowed    = 9
+      header_too_long         = 10
+      dp_error_create         = 11
+      dp_error_send           = 12
+      dp_error_write          = 13
+      unknown_dp_error        = 14
+      access_denied           = 15
+      dp_out_of_memory        = 16
+      disk_full               = 17
+      dp_timeout              = 18
+      file_not_found          = 19
+      dataprovider_exception  = 20
+      control_flush_error     = 21
+      OTHERS                  = 22.
+ENDFORM.                    " PDF
+*&---------------------------------------------------------------------*
+*&      Form  MOSTRAR_ALV
+*&---------------------------------------------------------------------*
+FORM mostrar_alv .
+
+* VisualizaciÛn de salida
+  PERFORM layout.
+  PERFORM cargar_fieldcat TABLES ti_fieldcat.
+
+  CALL FUNCTION 'REUSE_ALV_GRID_DISPLAY'
+    EXPORTING
+      i_callback_program       = sy-repid
+      i_callback_user_command  = 'USER_COMMAND'
+      i_callback_pf_status_set = 'PF_STATUS'
+      it_fieldcat              = ti_fieldcat[]
+      is_layout                = wa_layout
+      it_sort                  = ti_sort
+      i_save                   = 'X'
+      i_grid_settings          = wa_grid_settings
+    TABLES
+      t_outtab                 = gt_sal_det
+    EXCEPTIONS
+      program_error            = 1
+      OTHERS                   = 2.
+
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+
+ENDFORM.                    "mostrar_alv
+
+*--------------------------------------------------------------------*
+*& Form fill_event
+*--------------------------------------------------------------------*
+FORM fill_event USING p_events TYPE slis_t_event.
+
+  DATA: ls_event TYPE slis_alv_event.
+
+  CLEAR ls_event.
+
+  MOVE 'TOP_OF_PAGE' TO ls_event-form.
+  APPEND ls_event TO p_events.
+
+ENDFORM. " FILL_EVENT
+
+*----------------------------------------------------------------------*
+*&   Form  SORT                                   (Subtotaliza Columnas)
+*----------------------------------------------------------------------*
+FORM sort.
+  DATA: ls_sort TYPE slis_sortinfo_alv.
+
+  CLEAR: ti_sort, ls_sort.
+
+  DEFINE mc_set_sort.
+    ls_sort-fieldname    = &1. " Campo de Tabla
+    ls_sort-spos         = &2. " Posicion
+    ls_sort-up           = &3. " Ordenado Acendente
+    ls_sort-down         = &4. " Ordenado Decendente
+    ls_sort-subtot       = &5. " Subtotalizado
+    ls_sort-expa         = &6. " Sirve para que salgan los subtotales
+    APPEND ls_sort TO ti_sort.
+    CLEAR: ls_sort.
+  END-OF-DEFINITION.
+
+  mc_set_sort 'INDRE' '1' ' ' ' ' ' ' ' '.
+  mc_set_sort 'RETTO' '2' ' ' ' ' 'X' 'X'.
+  mc_set_sort 'RETPA' '3' ' ' ' ' 'X' 'X'.
+  mc_set_sort 'TOTDO' '4' ' ' ' ' 'X' 'X'.
+
+ENDFORM.                    "SORT
+
+*--------------------------------------------------------------------*
+*      Carga el tÌtulo y subtÌtulo del reporte
+*--------------------------------------------------------------------*
+FORM initi_header.
+
+*  DATA: ti_header2 TYPE slis_listheader.
+*
+** Cargo el TÌtulo
+*  ti_header2-typ   = 'H'.
+*  ti_header2-info  = 'TÌtulo'.
+*  APPEND  ti_header2 TO ti_header.
+*
+** Cargo el SubtÌtulo
+*  CLEAR ti_header2.
+*  ti_header2-typ   = 'A'.
+*  ti_header2-info  = 'Sub TÌtulo.'.
+*  APPEND  ti_header2 TO ti_header.
+
+ENDFORM.                    "initi_header
+
+
+*--------------------------------------------------------------------*
+*&   Form  TOP_OF_PAGE
+*--------------------------------------------------------------------*
+FORM top_of_page .
+* Pasa a la cabecera el logo
+  CALL FUNCTION 'REUSE_ALV_COMMENTARY_WRITE'
+    EXPORTING
+*     I_LOGO             = 'ENJOYSAP_LOGO' " Logo
+      it_list_commentary = ti_header.
+ENDFORM.                    " TOP_OF_PAGE
+
+
+*--------------------------------------------------------------------*
+*&   Form  LAYOUT
+*--------------------------------------------------------------------*
+FORM layout.
+
+* Field that identify color line in internal table
+  CLEAR: wa_layout.
+  MOVE 'COLOR_LINE' TO wa_layout-info_fieldname.
+  wa_layout-colwidth_optimize  = ''.
+  wa_layout-f2code             = 'DOBCLICK'.
+
+
+ENDFORM. " FIN  LAYOUT
+
+
+*--------------------------------------------------------------------*
+*&   Form  USER_COMMAND
+*--------------------------------------------------------------------*
+FORM user_command USING  r_ucomm     LIKE sy-ucomm
+                         rs_selfield TYPE slis_selfield.
+
+  DATA: wl_file TYPE string.
+
+* Acciones del ALV - paulah
+  CASE r_ucomm.
+    WHEN 'DOBCLICK'.
+
+      IF rs_selfield-fieldname EQ 'BELNR' AND rs_selfield-value IS NOT INITIAL.
+        SET PARAMETER ID 'BLN' FIELD rs_selfield-value.
+        SET PARAMETER ID 'BUK' FIELD p_bukrs.
+        SET PARAMETER ID 'GJR' FIELD p_gjahr.
+
+        CALL TRANSACTION 'FB03' AND SKIP FIRST SCREEN.
+      ENDIF.
+
+    WHEN 'FC01'.
+      PERFORM imprimir_reporte.
+    WHEN 'FC02'.
+      PERFORM generar_pdf.
+  ENDCASE.
+
+* Aplicar Cambios Realizados en T_RP1
+  rs_selfield-refresh    = 'X'.
+  rs_selfield-row_stable = 'X'.
+
+  CLEAR: r_ucomm.
+ENDFORM.                    "USER_COMMAND
+
+*--------------------------------------------------------------------*
+*&   Form  PF_STATUS
+*--------------------------------------------------------------------*
+FORM pf_status USING ce_func_exclude TYPE slis_t_extab.
+
+  DATA: t_code_attrib_tab LIKE smp_dyntxt OCCURS 4 WITH HEADER LINE.
+*  DATA: wa_exlude         TYPE slis_extab.
+
+  DATA: wa_slis TYPE slis_selfield.
+
+
+  CLEAR: t_code_attrib_tab, t_code_attrib_tab[].
+
+  t_code_attrib_tab-text      = TEXT-001.
+  t_code_attrib_tab-icon_id   = '@0X@'.   "ICON_STORNO 56
+  t_code_attrib_tab-icon_text = TEXT-001.
+  t_code_attrib_tab-quickinfo = TEXT-001.
+  t_code_attrib_tab-path      = space.
+  APPEND t_code_attrib_tab.
+
+  t_code_attrib_tab-text      = TEXT-002.
+  t_code_attrib_tab-icon_id   = '@JF@'.   "ICON_STORNO 56
+  t_code_attrib_tab-icon_text = TEXT-002.
+  t_code_attrib_tab-quickinfo = TEXT-002.
+  t_code_attrib_tab-path      = space.
+  APPEND t_code_attrib_tab.
+
+
+* Agregar Botones Almacenados en T_CODE_ATTRIB_TAB
+  PERFORM dynamic_report_fcodes(rhteiln0) TABLES t_code_attrib_tab
+    USING  ce_func_exclude ' ' ' '.
+
+
+  SET PF-STATUS 'ALVLIST'  EXCLUDING ce_func_exclude
+                           OF PROGRAM 'RHTEILN0'.
+
+ENDFORM.  " FIN PF_STATUS
+
+*--------------------------------------------------------------------*
+*&      Form  cargar_fieldcat
+*--------------------------------------------------------------------*
+FORM cargar_fieldcat TABLES lv_fieldcat TYPE slis_t_fieldcat_alv.
+*    lv_fieldcat-seltext_l       = &2.
+*    lv_fieldcat-seltext_m       = &3.
+*    lv_fieldcat-checkbox    = 'X'.
+
+
+  REFRESH lv_fieldcat.
+
+* COD SII
+*  CLEAR lv_fieldcat.
+*  lv_fieldcat-fieldname       = 'TIPODTE'.
+*  lv_fieldcat-reptext_ddic    = 'Tipo Cod SII'.
+*  lv_fieldcat-outputlen       = '12'.
+*  lv_fieldcat-just            = 'L'.
+*  APPEND  lv_fieldcat.
+
+
+* TIPO DE DOCUMENTO
+  CLEAR lv_fieldcat.
+  lv_fieldcat-fieldname       = 'BLART'.
+  lv_fieldcat-reptext_ddic    = 'TIPO DOC.'.
+  lv_fieldcat-currency        = 'CLP'.
+  lv_fieldcat-outputlen       = '10'.
+  lv_fieldcat-just            = 'L'.
+  APPEND  lv_fieldcat.
+
+
+* DOCUMENTO
+  CLEAR lv_fieldcat.
+  lv_fieldcat-fieldname       = 'BELNR'.
+  lv_fieldcat-reptext_ddic    = 'DOCUMENTO'.
+  lv_fieldcat-outputlen       = '12'.
+  lv_fieldcat-just            = 'L'.
+  APPEND  lv_fieldcat.
+
+* CCASTILLOA 27.01.2021 Se agrega Columna Indicador Retencion
+* INDICADOR RETENCIÓN
+  CLEAR lv_fieldcat.
+  lv_fieldcat-fieldname       = 'WT_WITHCD'.
+  lv_fieldcat-reptext_ddic    = 'INDIC. RET.'.
+  lv_fieldcat-outputlen       = '11'.
+  lv_fieldcat-just            = 'L'.
+  APPEND  lv_fieldcat.
+
+* tipo RETENCIÓN POR DIRECTORIO
+  CLEAR lv_fieldcat.
+  lv_fieldcat-fieldname       = 'QSSKZ'.
+  lv_fieldcat-reptext_ddic    = 'TIPO RET.'.
+  lv_fieldcat-outputlen       = '25'.
+  lv_fieldcat-just            = 'L'.
+  lv_fieldcat-no_out          = 'X'.
+  APPEND  lv_fieldcat.
+
+
+* RETENCIÓN POR DIRECTORIO
+  CLEAR lv_fieldcat.
+  lv_fieldcat-fieldname       = 'TIPO_RET'.
+  lv_fieldcat-reptext_ddic    = 'TIPO RET.'.
+  lv_fieldcat-outputlen       = '25'.
+  lv_fieldcat-just            = 'L'.
+  APPEND  lv_fieldcat.
+
+
+* FACTURA
+  CLEAR lv_fieldcat.
+  lv_fieldcat-fieldname       = 'XBLNR'.
+  lv_fieldcat-reptext_ddic    = 'NUMERO DE BOLETA'.
+  lv_fieldcat-outputlen       = '15'.
+  lv_fieldcat-just            = 'L'.
+  APPEND  lv_fieldcat.
+
+
+* FECHA
+  CLEAR lv_fieldcat.
+*  lv_fieldcat-fieldname       = 'FECHA'.
+  lv_fieldcat-fieldname       = 'BUDAT'.
+  lv_fieldcat-just            = 'L'.
+  lv_fieldcat-reptext_ddic    = 'FECHA'.
+  lv_fieldcat-outputlen     = '10'.
+  APPEND  lv_fieldcat.
+
+* FECHA emsion
+  CLEAR lv_fieldcat.
+*  lv_fieldcat-fieldname       = 'FECHA'.
+  lv_fieldcat-fieldname       = 'BLDAT'.
+  lv_fieldcat-just            = 'L'.
+  lv_fieldcat-reptext_ddic    = 'FECHA EMISION'.
+  lv_fieldcat-outputlen     = '10'.
+  APPEND  lv_fieldcat.
+
+
+* RUT
+  CLEAR lv_fieldcat.
+  lv_fieldcat-fieldname       = 'STCD1'.
+  lv_fieldcat-reptext_ddic    = 'RUT'.
+  lv_fieldcat-outputlen       = '12'.
+  lv_fieldcat-just            = 'L'.
+  APPEND  lv_fieldcat.
+
+* Nombre
+  CLEAR lv_fieldcat.
+  lv_fieldcat-fieldname       = 'NAME1'.
+  lv_fieldcat-reptext_ddic    = 'NOMBRE PROVEEDOR'.
+  lv_fieldcat-outputlen       = '30'.
+  lv_fieldcat-just            = 'L'.
+  APPEND  lv_fieldcat.
+
+
+* BRUTO
+  CLEAR lv_fieldcat.
+  lv_fieldcat-fieldname       = 'EXENTO'.
+  lv_fieldcat-reptext_ddic    = 'EXENTO'.
+  lv_fieldcat-currency        = 'CLP'.
+  lv_fieldcat-outputlen       = '10'.
+  lv_fieldcat-just            = 'L'.
+  APPEND  lv_fieldcat.
+
+
+* BRUTO
+  CLEAR lv_fieldcat.
+  lv_fieldcat-fieldname       = 'BRUTO'.
+  lv_fieldcat-reptext_ddic    = 'BRUTO'.
+  lv_fieldcat-currency        = 'CLP'.
+  lv_fieldcat-outputlen       = '10'.
+  lv_fieldcat-just            = 'L'.
+  APPEND  lv_fieldcat.
+
+** RETENCION
+*  CLEAR lv_fieldcat.
+*  lv_fieldcat-fieldname       = 'RETEN'.
+*  lv_fieldcat-reptext_ddic    = 'RETENCION 10%'.
+*  lv_fieldcat-currency        = 'CLP'.
+*  lv_fieldcat-outputlen       = '10'.
+*  lv_fieldcat-just            = 'L'.
+*  APPEND  lv_fieldcat.
+
+* CCASTILLOA 27.01.2021 No Exponer Columna en ALV
+** RETENCION 10
+*  CLEAR lv_fieldcat.
+*  lv_fieldcat-fieldname       = 'DMBTR_Q4'.
+*  lv_fieldcat-reptext_ddic    = 'RETENCION 10%'.
+*  lv_fieldcat-currency        = 'CLP'.
+*  lv_fieldcat-outputlen       = '15'.
+*  lv_fieldcat-just            = 'L'.
+*  APPEND  lv_fieldcat.
+
+* RETENCION 10,75
+  CLEAR lv_fieldcat.
+  lv_fieldcat-fieldname       = 'DMBTR_Q5'.
+* CCASTILLOA 27.01.2021 Modificacion Texto Columna Retencion
+*  lv_fieldcat-reptext_ddic    = 'RETENCION 10,75%'.
+  lv_fieldcat-reptext_ddic    = 'RETENCION DOCUMENTO'.
+  lv_fieldcat-currency        = 'CLP'.
+  lv_fieldcat-outputlen       = '20'.
+  lv_fieldcat-just            = 'L'.
+  APPEND  lv_fieldcat.
+
+* RETENCION 3%
+  CLEAR lv_fieldcat.
+  lv_fieldcat-fieldname       = 'RETEN3'.
+* CCASTILLOA 27.01.2021 Modificacion Texto Columna Retencion
+*  lv_fieldcat-reptext_ddic    = 'RETENCION 10,75%'.
+  lv_fieldcat-reptext_ddic    = 'RETENCION 3% LEY 21.252'.
+  lv_fieldcat-currency        = 'CLP'.
+  lv_fieldcat-outputlen       = '20'.
+  lv_fieldcat-just            = 'L'.
+  APPEND  lv_fieldcat.
+
+* TOTAL
+  CLEAR lv_fieldcat.
+  lv_fieldcat-fieldname       = 'TOTAL'.
+  lv_fieldcat-reptext_ddic    = 'TOTAL'.
+  lv_fieldcat-currency        = 'CLP'.
+  lv_fieldcat-outputlen       = '10'.
+  lv_fieldcat-just            = 'L'.
+  APPEND  lv_fieldcat.
+
+
+
+ENDFORM. "CATALOG
