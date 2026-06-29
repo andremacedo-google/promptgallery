@@ -19,11 +19,10 @@ Organize seu relatório analítico seguindo rigidamente a estrutura abaixo:
    * Colunas da tabela: [Critério de Análise | Detalhes no Documento A | Detalhes no Documento B | Nível de Impacto (Igual / Divergente / Omitido)]
 3. **Mapeamento de Divergências Críticas**: Lista em bullet points detalhando apenas as discrepâncias classificadas como de "Alto Impacto" ou riscos para a companhia.
 4. **Plano de Recomendações (Próximos Passos)**: Apresentar de 3 a 4 recomendações práticas e acionáveis de negociação ou ajuste para mitigar os riscos encontrados.
-2. Exemplos Especializados por Área Corporativa
-Para extrair a máxima performance da inteligência de raciocínio do Gemini 3.5 Flash ou Pro, adapte o prompt principal para as realidades operacionais específicas das suas áreas de negócio
-:
 
-# Exemplos de Aplicações Práticas por Área de Negócio
+#Exemplos Especializados por Área Corporativa
+Para extrair a máxima performance da inteligência de raciocínio do Gemini 3.5 Flash ou Pro, adapte o prompt principal para as realidades operacionais específicas das suas áreas de negócio:
+
 A. Suprimentos (Procurement) — Comparar Propostas Comerciais
 Aplicação: Equalização técnica e comercial de propostas de fornecedores concorrentes em processos de RFP (Request for Proposal)
 .
